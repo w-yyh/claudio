@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/*.mp3
+data/*.wav
+data/history.json
+data/mood-log.json
