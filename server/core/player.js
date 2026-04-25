@@ -1,119 +1,144 @@
 import { writeFile, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 
 import { state } from './state.js';
 import { eventBus } from './event-bus.js';
+import { PlaybackMaster } from './master.js';
 import { ClaudeAdapter } from '../adapters/claude.adapter.js';
 import { NeteaseAdapter } from '../adapters/netease.adapter.js';
-import { FishAudioAdapter } from '../adapters/fish-audio.adapter.js';
 import { WeatherAdapter } from '../adapters/weather.adapter.js';
+import { ContentModule } from '../modules/content.js';
+import { ScheduleModule } from '../modules/schedule.js';
+import { TTLModule } from '../modules/ttl.js';
 import { buildDJContext } from '../prompts/context-builder.js';
 
-const execFileAsync = promisify(execFile);
 const __dir = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dir, '../../data');
 
 export class Player {
   #claude;
   #netease;
-  #fish;
   #weather;
+  #content;
+  #schedule;
+  #ttl;
+  #master;
 
-  constructor() {
-    this.#claude = new ClaudeAdapter();
-    this.#netease = new NeteaseAdapter();
-    this.#fish = new FishAudioAdapter();
-    this.#weather = new WeatherAdapter();
+  constructor({ scheduleModule, fishAdapter } = {}) {
+    this.#claude   = new ClaudeAdapter();
+    this.#netease  = new NeteaseAdapter();
+    this.#weather  = new WeatherAdapter();
+    this.#content  = new ContentModule(fishAdapter);
+    this.#schedule = scheduleModule ?? new ScheduleModule();
+    this.#ttl      = new TTLModule();
+    this.#master   = new PlaybackMaster();
+
+    // 歌曲剩余 30 秒时预生成下一段 DJ 词
+    this.#ttl.on('PRE_GENERATE', () => this.#preGenerateNext());
+    // TTL 兜底结束事件（正常由 master 播完触发，此处双保险）
+    this.#ttl.on('TRACK_ENDED', () => {
+      if (state.current === 'PUSH') {
+        this.startSession(state.getContext().mood).catch(console.error);
+      }
+    });
+  }
+
+  async init() {
+    await this.#schedule.init();
+  }
+
+  setTarget(target, upnpModule = null) {
+    this.#master.setTarget(target, upnpModule);
+    state.updateContext({ target });
   }
 
   /**
-   * Run a full DJ session: context → AI decision → TTS → music.
+   * 完整 DJ 会话：上下文 → Claude 决策 → TTS → 选歌 → 播放
    * @param {string} [mood]
    */
   async startSession(mood) {
+    this.#ttl.stop();
     state.reset();
     state.transition('PROTO', { mood });
 
-    // ── 1. Build context ────────────────────────────────────────────────────
-    let weather = null;
-    try {
-      weather = await this.#weather.getCurrentWeather();
-    } catch (err) {
-      console.warn('[Player] Weather fetch failed:', err.message);
-    }
+    // ── 1. 并行获取天气 & 日程 ────────────────────────────────────────────
+    const [weather, schedule] = await Promise.allSettled([
+      this.#weather.getCurrentWeather(),
+      this.#schedule.getTodaySummary(),
+    ]).then((results) => results.map((r) => (r.status === 'fulfilled' ? r.value : null)));
 
-    const ctx = await buildDJContext({ mood, weather });
+    const ctx = await buildDJContext({ mood, weather, schedule });
     state.updateContext({ weather });
 
-    // ── 2. Claude DJ decision ───────────────────────────────────────────────
-    console.log('[Player] Requesting DJ decision from Claude...');
-    let script = '';
+    // ── 2. Claude DJ 决策 ────────────────────────────────────────────────
+    state.transition('PUB');
+
+    let script = `好的，${mood ? `感受到你${mood}的心情，` : ''}来一首歌放松一下。`;
     let strategy = { keywords: [mood ?? '流行'], bpm_range: [80, 120], mood_tags: [], exclude_ids: [] };
 
     try {
-      state.transition('PUB');
+      console.log('[Player] Requesting DJ decision...');
       const decision = await this.#claude.getDJDecision(ctx);
-      script = decision.script;
+      script   = decision.script;
       strategy = decision.strategy;
-      state.updateContext({ djScript: script });
       console.log('\n── DJ Script ──────────────────────────────────────');
       console.log(script);
       console.log('──────────────────────────────────────────────────\n');
     } catch (err) {
-      console.error('[Player] Claude failed:', err.message);
-      script = `好的，${mood ? `感受到你${mood}的心情，` : ''}来一首歌放松一下。`;
-      state.updateContext({ djScript: script });
+      console.error('[Player] Claude failed (using fallback):', err.message);
     }
+    state.updateContext({ djScript: script });
 
-    // ── 3. TTS synthesis ────────────────────────────────────────────────────
-    let ttsPath = null;
-    try {
-      const buffer = await this.#fish.synthesize(script);
-      if (buffer) {
-        ttsPath = join(DATA_DIR, `dj_${Date.now()}.mp3`);
-        await writeFile(ttsPath, buffer);
-        console.log(`[Player] TTS saved → ${ttsPath}`);
-      }
-    } catch (err) {
-      console.warn('[Player] TTS failed, skipping DJ voice:', err.message);
-    }
-
-    // ── 4. Search & select track ────────────────────────────────────────────
-    let track = null;
+    // ── 3. TTS 合成（并行进行选歌）────────────────────────────────────────
     const keywords = strategy.keywords?.[0] ?? (mood ?? '流行');
-    try {
-      const results = await this.#netease.search(keywords, 10);
-      const filtered = results.filter((s) => !strategy.exclude_ids?.includes(s.id));
-      track = filtered[0] ?? results[0] ?? null;
-    } catch (err) {
-      console.warn('[Player] Netease search failed:', err.message);
-    }
+
+    const [ttsPath, tracks] = await Promise.allSettled([
+      this.#content.synthesize(script),
+      this.#netease.search(keywords, 10),
+    ]).then((results) => [
+      results[0].status === 'fulfilled' ? results[0].value : null,
+      results[1].status === 'fulfilled' ? results[1].value : [],
+    ]);
+
+    // ── 4. 选歌 ─────────────────────────────────────────────────────────
+    const filtered = tracks.filter((s) => !strategy.exclude_ids?.includes(s.id));
+    const track = filtered[0] ?? tracks[0] ?? null;
 
     if (!track) {
-      console.error('[Player] No track found. Session aborted.');
+      console.error('[Player] No track found. Returning to IDLE.');
       state.transition('IDLE');
       return;
     }
 
-    state.transition('PUSH', { currentTrack: track, queue: [track] });
-    console.log(`[Player] Selected: ${track.name} — ${track.artist}`);
+    state.transition('PUSH', { currentTrack: track, queue: filtered.slice(0, 5) });
+    console.log(`[Player] ▶ ${track.name} — ${track.artist}`);
 
-    // ── 5. Get playable URL ──────────────────────────────────────────────────
+    // ── 5. 获取播放 URL ──────────────────────────────────────────────────
     let trackUrl = null;
     try {
       const urlInfo = await this.#netease.getTrackUrl(track.id);
       trackUrl = urlInfo.url;
     } catch (err) {
-      console.warn('[Player] Could not get track URL:', err.message);
+      console.warn('[Player] URL fetch failed:', err.message);
     }
 
-    // ── 6. Play ─────────────────────────────────────────────────────────────
-    await this.#play(ttsPath, trackUrl, track);
+    // ── 6. 播放 ──────────────────────────────────────────────────────────
+    if (ttsPath) {
+      await this.#master.playFile(ttsPath).catch((e) => console.warn('[Player] TTS play error:', e.message));
+    }
 
-    // ── 7. Log history ───────────────────────────────────────────────────────
+    if (trackUrl) {
+      this.#ttl.start(track.duration || 240000);
+      await this.#master.playUrl(trackUrl, { duration: track.duration })
+        .catch((e) => console.warn('[Player] Music play error:', e.message));
+    } else {
+      console.log(`[Player] No URL for "${track.name}"`);
+    }
+
+    this.#ttl.stop();
+
+    // ── 7. 历史记录 ──────────────────────────────────────────────────────
     await this.#appendHistory({ ...track, playedAt: new Date().toISOString(), mood, script });
 
     state.transition('IDLE');
@@ -121,50 +146,51 @@ export class Player {
   }
 
   async skip() {
-    if (state.current === 'PUSH') {
+    this.#ttl.stop();
+    await this.#master.stop();
+    if (state.current === 'PUSH' || state.current === 'PUB') {
       state.transition('IDLE');
-      eventBus.emit('SKIPPED');
     }
+    eventBus.emit('SKIPPED');
+  }
+
+  async pause() {
+    if (state.current === 'PUSH') {
+      await this.#master.pause();
+      state.transition('PAUSE');
+    }
+  }
+
+  async resume() {
+    if (state.current === 'PAUSE') {
+      await this.#master.resume();
+      state.transition('PUSH');
+    }
+  }
+
+  async setVolume(level) {
+    state.updateContext({ volume: level });
+    await this.#master.setVolume(level);
   }
 
   async nextTrack() {
     if (state.current === 'PUSH') {
-      state.transition('PROTO');
-      // Re-run music selection only (no new DJ script)
-      // Simplified: just restart session
+      await this.skip();
       await this.startSession(state.getContext().mood);
     }
   }
 
-  // ── Private helpers ────────────────────────────────────────────────────────
+  // ── private ────────────────────────────────────────────────────────────────
 
-  async #play(ttsPath, trackUrl, track) {
-    // Play TTS first, then music
-    if (ttsPath) {
-      await this.#playFile(ttsPath).catch((e) => console.warn('[Player] TTS play error:', e.message));
-    }
-
-    if (trackUrl) {
-      console.log(`[Player] Now playing: ${track.name} — ${track.artist}`);
-      console.log(`         URL: ${trackUrl}`);
-      await this.#playFile(trackUrl).catch((e) => console.warn('[Player] Music play error:', e.message));
-    } else {
-      console.log(`[Player] No playable URL for "${track.name}". Skipping audio.`);
-    }
-  }
-
-  #playFile(pathOrUrl) {
-    return new Promise((resolve) => {
-      const proc = execFile('afplay', [pathOrUrl], (err) => {
-        if (err && err.code !== 'SIGTERM') {
-          console.warn('[Player] afplay exited:', err.message);
-        }
-        resolve();
-      });
-
-      // Expose proc for potential skip implementation
-      this._currentProc = proc;
-    });
+  async #preGenerateNext() {
+    const ctx = state.getContext();
+    const mood = ctx.mood;
+    try {
+      console.log('[Player] Pre-generating next DJ script...');
+      const djCtx = await buildDJContext({ mood });
+      const script = await this.#claude.regenerateScript(djCtx, '自动循环');
+      if (script) this.#content.preCache(script);
+    } catch { /* 预生成失败不影响当前播放 */ }
   }
 
   async #appendHistory(entry) {
@@ -174,8 +200,6 @@ export class Player {
       const arr = JSON.parse(raw);
       arr.push(entry);
       await writeFile(path, JSON.stringify(arr.slice(-200), null, 2));
-    } catch (err) {
-      console.warn('[Player] History write failed:', err.message);
-    }
+    } catch { /* 忽略历史写入失败 */ }
   }
 }

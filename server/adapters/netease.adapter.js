@@ -6,9 +6,12 @@ const URL_TTL_MS = 15 * 60 * 1000; // 15 minutes (Netease URLs valid ~20 min)
 
 export class NeteaseAdapter {
   #base;
+  #fetch;
 
-  constructor() {
-    this.#base = config.netease.apiUrl.replace(/\/$/, '');
+  /** @param {typeof fetch} [fetchFn]  可注入，方便单测 */
+  constructor(fetchFn) {
+    this.#base  = config.netease.apiUrl.replace(/\/$/, '');
+    this.#fetch = fetchFn ?? fetch;
   }
 
   /**
@@ -19,7 +22,7 @@ export class NeteaseAdapter {
    */
   async search(keywords, limit = 10) {
     const url = `${this.#base}/search?keywords=${encodeURIComponent(keywords)}&limit=${limit}`;
-    const res = await fetch(url);
+    const res = await this.#fetch(url);
     if (!res.ok) throw new Error(`Netease search failed: ${res.status}`);
 
     const data = await res.json();
@@ -44,7 +47,7 @@ export class NeteaseAdapter {
       return { url: cached.url, expireAt: cached.fetchedAt + URL_TTL_MS };
     }
 
-    const res = await fetch(`${this.#base}/song/url?id=${songId}`);
+    const res = await this.#fetch(`${this.#base}/song/url?id=${songId}`);
     if (!res.ok) throw new Error(`Netease song/url failed: ${res.status}`);
 
     const data = await res.json();

@@ -29,6 +29,13 @@ export const config = {
     city: optional_env('WEATHER_CITY', 'Beijing'),
     apiUrl: 'https://api.openweathermap.org/data/2.5',
   },
+  ticktick: {
+    apiToken: optional_env('TICKTICK_API_TOKEN'),
+    mcpUrl: optional_env('TICKTICK_MCP_URL', 'https://mcp.dida365.com'),
+  },
+  upnp: {
+    scanTimeoutMs: parseInt(optional_env('UPNP_SCAN_TIMEOUT', '5000'), 10),
+  },
   server: {
     port: parseInt(optional_env('PORT', '4000'), 10),
   },

@@ -14,11 +14,14 @@ export class WeatherAdapter {
   #apiKey;
   #base;
   #city;
+  #fetch;
 
-  constructor() {
+  /** @param {typeof fetch} [fetchFn]  可注入，方便单测 */
+  constructor(fetchFn) {
     this.#apiKey = config.weather.apiKey;
-    this.#base = config.weather.apiUrl;
-    this.#city = config.weather.city;
+    this.#base   = config.weather.apiUrl;
+    this.#city   = config.weather.city;
+    this.#fetch  = fetchFn ?? fetch;
   }
 
   /**
@@ -37,7 +40,7 @@ export class WeatherAdapter {
     const url = `${this.#base}/weather?q=${encodeURIComponent(target)}&appid=${this.#apiKey}&units=metric&lang=zh_cn`;
 
     try {
-      const res = await fetch(url);
+      const res = await this.#fetch(url);
       if (!res.ok) throw new Error(`OpenWeather API ${res.status}`);
       const data = await res.json();
 
