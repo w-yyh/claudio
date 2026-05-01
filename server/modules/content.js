@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { writeFile, unlink, readdir } from 'fs/promises';
+import { writeFile, unlink, readdir, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { FishAudioAdapter } from '../adapters/fish-audio.adapter.js';
@@ -7,6 +7,8 @@ import { FishAudioAdapter } from '../adapters/fish-audio.adapter.js';
 const __dir = dirname(fileURLToPath(import.meta.url));
 const AUDIO_DIR = join(__dir, '../../data');
 const MAX_CACHED_FILES = 50;
+
+await mkdir(AUDIO_DIR, { recursive: true }).catch(() => {});
 
 /**
  * CONTENT.JS — TTS 任务队列 + 音频缓存

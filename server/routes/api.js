@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { readFile } from 'fs/promises';
 import { state } from '../core/state.js';
+import { UPnPModule } from '../modules/upnp.js';
 
 const router = Router();
 
@@ -40,6 +42,27 @@ router.post('/devices/scan', async (req, res) => {
 /** GET /api/health */
 router.get('/health', (_req, res) => {
   res.json({ ok: true, state: state.current });
+});
+
+/** GET /api/upnp-file — 为 UPnP 设备提供本地文件 */
+router.get('/upnp-file', async (req, res) => {
+  const name = req.query.name;
+  if (!name) return res.status(400).send('Missing name');
+
+  const fileMap = UPnPModule.getFileMap();
+  const filePath = fileMap.get(name);
+
+  if (!filePath) {
+    // 也尝试直接以路径查找
+    return res.status(404).send('File not found in UPnP mapping');
+  }
+
+  try {
+    const content = await readFile(filePath);
+    res.type('audio/mpeg').send(content);
+  } catch {
+    res.status(404).send('File not found');
+  }
 });
 
 export { router as apiRouter };

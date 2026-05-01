@@ -4,3 +4,7 @@ data/*.mp3
 data/*.wav
 data/history.json
 data/mood-log.json
+data/taste-profile.json
+bin/
+login-qr.png
+*.log

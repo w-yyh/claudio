@@ -1,7 +1,11 @@
-import { Client as SsdpClient } from 'node-ssdp';
+import { basename } from 'path';
+import ssdp from 'node-ssdp';
+const { Client: SsdpClient } = ssdp;
 import fetch from 'node-fetch';
 import { parseStringPromise } from 'xml2js';
 import { config } from '../config.js';
+
+const fileMap = new Map();
 
 /**
  * UPNP.JS — UPnP/DLNA 家庭音响推流
@@ -11,7 +15,15 @@ import { config } from '../config.js';
  * 断联时自动降级到 local 播放。
  */
 export class UPnPModule {
-  #devices = new Map();  // descUrl → DeviceInfo
+  #devices = new Map();
+  #serverOrigin = 'http://localhost:4000';
+
+  /**
+   * 设置服务器地址（用于生成 UPnP 本地文件 URL）
+   */
+  setServerOrigin(origin) {
+    this.#serverOrigin = origin;
+  }
 
   /**
    * 扫描局域网 UPnP/DLNA 设备
@@ -46,6 +58,22 @@ export class UPnPModule {
 
   get knownDevices() {
     return [...this.#devices.values()];
+  }
+
+  /**
+   * 推送本地文件到 UPnP 设备播放
+   * 通过 HTTP 将文件暴露给设备，再调用 playUrl
+   */
+  async playLocal(filePath) {
+    const devices = this.knownDevices;
+    if (!devices.length) throw new Error('No UPnP devices found');
+
+    const fileName = basename(filePath);
+    const serveUrl = `${this.#serverOrigin}/api/upnp-file?name=${encodeURIComponent(fileName)}`;
+
+    fileMap.set(fileName, filePath);
+
+    return this.playUrl(devices[0].descUrl, serveUrl);
   }
 
   /**
@@ -86,6 +114,13 @@ export class UPnPModule {
     ).catch(() => {});
   }
 
+  /**
+   * 供 API 路由读取 UPnP 文件映射
+   */
+  static getFileMap() {
+    return fileMap;
+  }
+
   // ── private ───────────────────────────────────────────────────────────────
 
   async #fetchDeviceInfo(descUrl) {
@@ -100,7 +135,6 @@ export class UPnPModule {
     const friendlyName = device.friendlyName ?? 'Unknown Device';
     const baseUrl = new URL(descUrl).origin;
 
-    // 找 AVTransport 和 RenderingControl 服务的 controlURL
     const services = [].concat(device.serviceList?.service ?? []);
     const avSvc  = services.find((s) => String(s.serviceType).includes('AVTransport'));
     const rcSvc  = services.find((s) => String(s.serviceType).includes('RenderingControl'));

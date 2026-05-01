@@ -8,7 +8,7 @@
  */
 
 import 'dotenv/config';
-import { ClaudeAdapter } from '../server/adapters/claude.adapter.js';
+import { LLMAdapter } from '../server/adapters/llm.adapter.js';
 import { NeteaseAdapter } from '../server/adapters/netease.adapter.js';
 import { FishAudioAdapter } from '../server/adapters/fish-audio.adapter.js';
 import { WeatherAdapter } from '../server/adapters/weather.adapter.js';
@@ -26,14 +26,14 @@ async function run(name, fn) {
   }
 }
 
-// ── Claude ───────────────────────────────────────────────────────────────────
-await run('Claude — non-empty reply', async () => {
-  const claude = new ClaudeAdapter();
-  const reply = await claude.complete([
+// ── LLM ──────────────────────────────────────────────────────────────────────
+await run('LLM — non-empty reply', async () => {
+  const llm = new LLMAdapter();
+  const reply = await llm.complete([
     { role: 'user', content: 'Reply with exactly: CLAUDIO_OK' },
-  ], { model: process.env.CLAUDE_MODEL ?? 'claude-sonnet-4-6', maxTokens: 32 });
+  ], { maxTokens: 32 });
 
-  if (!reply || reply.trim().length === 0) throw new Error('Empty reply from Claude');
+  if (!reply || reply.trim().length === 0) throw new Error('Empty reply from LLM');
   console.log(`        Response: ${reply.trim().slice(0, 80)}`);
 });
 

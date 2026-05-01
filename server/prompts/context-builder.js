@@ -62,6 +62,8 @@ export async function buildDJContext({ mood, weather, schedule } = {}) {
     // Dimension 2: Work state (from TickTick / schedule)
     work: {
       density: schedule?.density ?? null,
+      taskCount: schedule?.taskCount ?? 0,
+      taskTitles: schedule?.taskTitles ?? [],
       nextTask: schedule?.nextTask ?? null,
       hasDeadlineToday: schedule?.hasDeadlineToday ?? false,
       available: !!schedule,

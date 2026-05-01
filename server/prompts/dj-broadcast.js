@@ -1,12 +1,12 @@
 /**
- * Build the messages array for Claude to generate a Claudio DJ broadcast script.
+ * Build the messages array for LLM to generate a Claudio DJ broadcast script.
  *
  * Output contract: a 30–60 second spoken monologue in natural Chinese,
  * warm and witty, with Claudio's personality.
  *
  * @param {import('./context-builder.js').DJContext} ctx
  * @param {{ regenerationReason?: string }} [opts]
- * @returns {import('@anthropic-ai/sdk').MessageParam[]}
+ * @returns {Array<{role: string, content: string}>}
  */
 export function buildDJBroadcastMessages(ctx, opts = {}) {
   const { env, work, personal } = ctx;
@@ -17,8 +17,10 @@ export function buildDJBroadcastMessages(ctx, opts = {}) {
 
   const scheduleDesc = work.available
     ? [
-        `今日日程密度：${work.density ?? '未知'}`,
-        work.nextTask ? `下一个任务：「${work.nextTask.title}」（${work.nextTask.dueDate ?? '未定时间'}）` : '今日暂无计划任务',
+        `今日有 ${work.taskCount ?? 0} 个未完成任务`,
+        work.taskTitles?.length ? `今日事项：${work.taskTitles.join('、')}` : '',
+        `日程密度：${work.density ?? '未知'}`,
+        work.nextTask ? `最近一个任务：「${work.nextTask.title}」（${work.nextTask.dueDate ?? '未定时间'}）` : '',
         work.hasDeadlineToday ? '⚠️ 今天有 deadline。' : '',
       ]
         .filter(Boolean)
@@ -48,6 +50,7 @@ ${scheduleDesc}
 请生成一段 Claudio 风格的 DJ 口白。${regenerationNote}`;
 
   return [
-    { role: 'user', content: `[系统设定]\n${systemPrompt}\n\n[任务]\n${userPrompt}` },
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
   ];
 }

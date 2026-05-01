@@ -11,10 +11,10 @@ function optional_env(key, fallback = '') {
 }
 
 export const config = {
-  claude: {
-    apiKey: require_env('CLAUDE_API_KEY'),
-    modelDecision: 'claude-opus-4-6',
-    modelFast: 'claude-sonnet-4-6',
+  llm: {
+    apiKey: require_env('LLM_API_KEY'),
+    apiUrl: optional_env('LLM_API_URL', 'https://api.deepseek.com/v1'),
+    model: optional_env('LLM_MODEL', 'deepseek-chat'),
   },
   fishAudio: {
     apiKey: require_env('FISH_AUDIO_KEY'),
@@ -23,6 +23,7 @@ export const config = {
   },
   netease: {
     apiUrl: optional_env('NETEASE_API_URL', 'http://localhost:3000'),
+    cookie: optional_env('NETEASE_COOKIE'),
   },
   weather: {
     apiKey: optional_env('WEATHER_API_KEY'),

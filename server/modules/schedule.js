@@ -80,20 +80,33 @@ export class ScheduleModule {
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const todayEnd   = todayStart + 86400000;
 
-    // 找有时间节点的未完成任务，按时间排序
     const timedTasks = tasks
-      .filter((t) => !t.completedTime)
+      .filter((t) => t.status !== 2)
       .filter((t) => {
         const ts = t.dueDate ? new Date(t.dueDate).getTime() : null;
-        return ts && ts >= todayStart && ts < todayEnd;
+        const ss = t.startDate ? new Date(t.startDate).getTime() : null;
+        const d = ts ?? ss;
+        return d && d >= todayStart && d < todayEnd;
       })
-      .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+      .sort((a, b) => {
+        const aTime = new Date(a.startDate ?? a.dueDate).getTime();
+        const bTime = new Date(b.startDate ?? b.dueDate).getTime();
+        return aTime - bTime;
+      });
 
-    const nextTask = timedTasks.find((t) => new Date(t.dueDate).getTime() > Date.now()) ?? null;
+    const upcoming = timedTasks.filter((t) => {
+      const ts = t.startDate ? new Date(t.startDate).getTime()
+        : t.dueDate ? new Date(t.dueDate).getTime() : 0;
+      return ts > Date.now();
+    });
+
+    const nextTask = upcoming[0] ?? null;
 
     return {
       tasks,
-      density: this.#calcDensity(tasks.filter((t) => !t.completedTime).length),
+      taskCount: tasks.filter((t) => t.status !== 2).length,
+      taskTitles: timedTasks.map((t) => t.title),
+      density: this.#calcDensity(tasks.filter((t) => t.status !== 2).length),
       nextTask,
       hasDeadlineToday: timedTasks.length > 0,
     };
@@ -106,7 +119,7 @@ export class ScheduleModule {
   }
 
   #emptySummary() {
-    return { tasks: [], density: 'light', nextTask: null, hasDeadlineToday: false };
+    return { tasks: [], taskCount: 0, taskTitles: [], density: 'light', nextTask: null, hasDeadlineToday: false };
   }
 }
 

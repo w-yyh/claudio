@@ -34,13 +34,25 @@ export function setupWebSocket(server, player, upnp) {
   }
 
   // ── 内部事件 → 广播 ───────────────────────────────────────────────────────
+  let lastDJScript = '';
+  let lastTrackId = '';
+
   eventBus.on('STATE_CHANGE', ({ prev, next, context }) => {
     broadcast('STATE_CHANGE', { prev, next, context });
-    if (context.currentTrack) {
+    if (context.currentTrack && context.currentTrack.id !== lastTrackId) {
+      lastTrackId = context.currentTrack.id;
       broadcast('TRACK_UPDATE', { track: context.currentTrack });
     }
-    if (context.djScript) {
+    if (context.djScript && context.djScript !== lastDJScript) {
+      lastDJScript = context.djScript;
       broadcast('DJ_SCRIPT', { text: context.djScript });
+    }
+  });
+
+  eventBus.on('DJ_SCRIPT_READY', ({ text }) => {
+    if (text && text !== lastDJScript) {
+      lastDJScript = text;
+      broadcast('DJ_SCRIPT', { text });
     }
   });
 
@@ -114,6 +126,14 @@ async function handleCommand(msg, player, upnp, broadcast) {
       break;
     }
 
+    case 'CMD_SEEK': {
+      const secs = Number(msg.seconds);
+      if (!isNaN(secs) && secs >= 0) {
+        await player.seekTo(secs);
+      }
+      break;
+    }
+
     case 'CMD_MOOD':
       if (msg.mood) {
         state.updateContext({ mood: msg.mood });
@@ -125,8 +145,9 @@ async function handleCommand(msg, player, upnp, broadcast) {
 
     case 'CMD_TARGET':
       if (msg.target === 'local' || msg.target === 'upnp') {
-        state.updateContext({ target: msg.target, upnpDevice: msg.deviceUrl ?? null });
-        player.setTarget(msg.target, msg.target === 'upnp' ? upnp : null);
+        const deviceUrl = msg.deviceUrl ?? null;
+        state.updateContext({ target: msg.target, upnpDevice: deviceUrl });
+        player.setTarget(msg.target, msg.target === 'upnp' ? upnp : null, deviceUrl);
       }
       break;
 

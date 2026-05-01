@@ -15,6 +15,7 @@ export class TickTickMCPAdapter {
   #client = null;
   #connected = false;
   #availableTools = [];
+  #timezone = 'Asia/Shanghai';
 
   async connect() {
     if (this.#connected) return;
@@ -38,12 +39,17 @@ export class TickTickMCPAdapter {
       this.#client = new Client({ name: 'claudio', version: '0.1.0' });
       await this.#client.connect(transport);
 
-      // 发现可用 tools
       const { tools } = await this.#client.listTools();
       this.#availableTools = tools.map((t) => t.name);
       this.#connected = true;
 
       console.log('[TickTick] MCP connected. Tools:', this.#availableTools.join(', '));
+
+      // 获取用户时区
+      try {
+        const r = await this.#callTool('get_user_preference', {});
+        if (r?.time_zone) this.#timezone = r.time_zone;
+      } catch {}
     } catch (err) {
       console.warn('[TickTick] MCP connect failed:', err.message);
       this.#connected = false;
@@ -53,29 +59,14 @@ export class TickTickMCPAdapter {
   get isConnected() { return this.#connected; }
 
   /**
-   * 获取今日有 dueDate 的任务
+   * 获取今日未完成任务
    * @returns {Promise<Task[]>}
    */
   async getTodayTasks() {
-    return this.#callTool(
-      ['get_today_tasks', 'getTodayTasks', 'list_today_tasks'],
-      {},
-      []
-    );
-  }
-
-  /**
-   * 获取指定时间范围内的任务
-   * @param {string} startISO
-   * @param {string} endISO
-   * @returns {Promise<Task[]>}
-   */
-  async getTasksInRange(startISO, endISO) {
-    return this.#callTool(
-      ['get_tasks_in_range', 'getTasksInRange', 'list_tasks'],
-      { startDate: startISO, endDate: endISO },
-      []
-    );
+    const raw = await this.#callTool('list_undone_tasks_by_time_query', {
+      query_command: 'today',
+    });
+    return this.#normalizeTasks(raw);
   }
 
   /**
@@ -83,11 +74,14 @@ export class TickTickMCPAdapter {
    * @returns {Promise<Project[]>}
    */
   async getProjects() {
-    return this.#callTool(
-      ['get_projects', 'getProjects', 'list_projects'],
-      {},
-      []
-    );
+    const raw = await this.#callTool('list_projects', {});
+    if (!raw) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return arr.map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+    }));
   }
 
   async disconnect() {
@@ -99,35 +93,47 @@ export class TickTickMCPAdapter {
 
   // ── private ──────────────────────────────────────────────────────────────
 
-  /**
-   * 按优先级尝试 toolNames 列表，调用第一个匹配的 tool
-   */
-  async #callTool(toolNames, args, fallback) {
-    if (!this.#connected) return fallback;
-
-    const name = toolNames.find((n) => this.#availableTools.includes(n));
-    if (!name) {
-      console.warn('[TickTick] None of tools found:', toolNames.join(', '),
-        '— available:', this.#availableTools.join(', '));
-      return fallback;
-    }
+  async #callTool(name, args) {
+    if (!this.#connected) return null;
 
     try {
       const result = await this.#client.callTool({ name, arguments: args });
-      // MCP tool 返回值通常在 content[0].text（JSON 字符串）
-      const raw = result?.content?.[0]?.text ?? result?.content;
-      if (!raw) return fallback;
+      const raw = result?.content?.[0]?.text;
+      if (!raw) return null;
 
-      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      return Array.isArray(parsed) ? parsed : (parsed.tasks ?? parsed.items ?? fallback);
+      return JSON.parse(raw);
     } catch (err) {
       console.warn(`[TickTick] tool '${name}' failed:`, err.message);
-      return fallback;
+      return null;
     }
+  }
+
+  /**
+   * 将 MCP 返回的任务数据标准化为 Task[]
+   * 处理单个对象 / 数组两种格式，snake_case → camelCase
+   */
+  #normalizeTasks(raw) {
+    if (!raw) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+
+    return arr.map((t) => ({
+      id: t.id,
+      projectId: t.project_id,
+      title: t.title,
+      content: t.content ?? t.desc ?? '',
+      startDate: t.start_date ?? null,
+      dueDate: t.due_date ?? null,
+      priority: t.priority ?? 0,
+      status: t.status ?? 0,
+      tags: Array.isArray(t.tags) ? t.tags : [],
+      completedTime: t.completed_time ?? null,
+      isAllDay: t.is_all_day ?? false,
+      kind: t.kind,
+    }));
   }
 }
 
 /**
- * @typedef {{ id: string, title: string, content: string, startDate?: string, dueDate?: string, priority: 0|1|3|5, tags: string[], projectId: string }} Task
+ * @typedef {{ id: string, projectId: string, title: string, content: string, startDate?: string, dueDate?: string, priority: number, status: number, tags: string[], completedTime?: string, isAllDay: boolean, kind: string }} Task
  * @typedef {{ id: string, name: string, color: string }} Project
  */
